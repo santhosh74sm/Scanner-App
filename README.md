@@ -1,38 +1,59 @@
-# Document Scanner
+# Paperly Document Scanner
 
-### An interactive document scanner built in Python using OpenCV
+A modern, single-image document-scanning application built around the repository's existing OpenCV detector and four-point perspective transform. The original `scan.py` command-line scanner remains available; the web experience layers FastAPI and React on top of the same `DocScanner.get_contour` and `four_point_transform` implementation.
 
-The scanner takes a poorly scanned image, finds the corners of the document, applies the perspective transformation to get a top-down view of the document, sharpens the image, and applies an adaptive color threshold to clean up the image.
+## Features
 
-On my test dataset of 280 images, the program correctly detected the corners of the document 92.8% of the time.
+- One-image workflow: upload → auto-detect → manually adjust four corners → perspective preview → enhance → download.
+- Original OpenCV LSD/contour detection and perspective-correction pipeline retained.
+- Enhancement modes: Original, Color, Grayscale, Black & White, High Contrast, Magic Color, and Auto.
+- Responsive React UI with drag/drop, draggable crop corners, loading states, progress tracking, comparisons, and JPG/PNG downloads.
+- Validated FastAPI endpoints and isolated per-scan sessions.
 
-This project makes use of the transform and imutils modules from pyimagesearch (which can be accessed [here](http://www.pyimagesearch.com/2014/09/01/build-kick-ass-mobile-document-scanner-just-5-minutes/)). The UI code for the interactive mode is adapted from `poly_editor.py` from [here](https://matplotlib.org/examples/event_handling/poly_editor.html).
+## Run locally
 
-* You can manually click and drag the corners of the document to be perspective transformed:
-![Example of interactive GUI](https://github.com/andrewdcampbell/doc_scanner/blob/master/ui.gif)
+Use Python 3.10+ and Node.js 20+.
 
-* The scanner can also process an entire directory of images automatically and save the output in an output directory:
-![Image Directory of images to be processed](https://github.com/andrewdcampbell/doc_scanner/blob/master/before_after.gif)
-
-#### Here are some examples of images before and after scan:
-<img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/sample_images/cell_pic.jpg" height="450"> <img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/output/cell_pic.jpg" height="450">
-
-<img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/sample_images/receipt.jpg" height="450"> <img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/output/receipt.jpg" height="450">
-
-<img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/sample_images/math_cheat_sheet.JPG" height="450"> <img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/output/math_cheat_sheet.JPG" height="450">
-
-<img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/sample_images/dollar_bill.JPG" width="350"> <img src="https://github.com/andrewdcampbell/doc_scanner/blob/master/output/dollar_bill.JPG" width="350">
-
-
-### Usage
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+uvicorn backend.app.main:app --reload --port 8001
 ```
-python scan.py (--images <IMG_DIR> | --image <IMG_PATH>) [-i]
+
+In a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
-* The `-i` flag enables interactive mode, where you will be prompted to click and drag the corners of the document. For example, to scan a single image with interactive mode enabled:
-```
+
+Open `http://localhost:5173`. The Vite development server proxies `/api` to FastAPI on port 8001. API docs are available at `http://127.0.0.1:8001/docs`.
+
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /upload` | Upload one supported image as multipart field `file`. Returns a session ID and image metadata. |
+| `POST /detect?session_id=...` | Run the preserved detector and return four pixel-space corners. |
+| `POST /crop` | Send `{ session_id, corners: [[x,y], ...] }` to apply the four-point transform. |
+| `POST /enhance` | Send `{ session_id, mode }` after crop to update the final preview. |
+| `GET /download?session_id=...&format=png` | Download final scan as `png` or `jpg`. |
+
+Supported upload types: JPEG, PNG, WEBP, BMP, and TIFF. Sessions are filesystem-isolated under `backend/data/` and are intentionally single-image only.
+
+## Existing CLI scanner
+
+The legacy command stays intact:
+
+```powershell
 python scan.py --image sample_images/desk.JPG -i
 ```
-* Alternatively, to scan all images in a directory without any input:
-```
-python scan.py --images sample_images
-```
+
+## Verification
+
+- `python -m compileall backend` checks the API package syntax.
+- `npm run build` checks the React/TypeScript production build.
+- Manual browser validation: upload an image, drag each crop handle, continue through comparison and enhancements, then download both output formats.
