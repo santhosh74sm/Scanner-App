@@ -1,0 +1,2 @@
+# Install from the repository root so the original scanner dependencies are available.
+-r ../requirements.txt
