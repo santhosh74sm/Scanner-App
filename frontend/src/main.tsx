@@ -31,13 +31,7 @@ type UploadData = {
 };
 
 const ENHANCEMENT_MODES = [
-  ['auto', 'Auto Enhance'],
-  ['magic_color', 'Magic Color'],
   ['black_white', 'B&W Clean'],
-  ['grayscale', 'Grayscale'],
-  ['high_contrast', 'High Contrast'],
-  ['color', 'Color Boost'],
-  ['original', 'Original'],
 ] as const;
 
 function formatApiUrl(path: string): string {
@@ -55,7 +49,7 @@ function App() {
   const [corners, setCorners] = useState<Point[]>([]);
   const [cropUrl, setCropUrl] = useState<string>('');
   const [finalUrl, setFinalUrl] = useState<string>('');
-  const [mode, setMode] = useState<string>('auto');
+  const [mode, setMode] = useState<string>('black_white');
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
@@ -183,7 +177,7 @@ function App() {
     setCropUrl('');
     setFinalUrl('');
     setCorners([]);
-    setMode('auto');
+    setMode('black_white');
     setError('');
   };
 
