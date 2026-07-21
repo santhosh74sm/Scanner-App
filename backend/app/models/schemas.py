@@ -10,4 +10,4 @@ class CornersRequest(DetectRequest):
 
 
 class EnhanceRequest(DetectRequest):
-    mode: str = Field(pattern="^(original|color|grayscale|black_white|high_contrast|magic_color|auto)$")
+    mode: str = Field(default="black_white", pattern="^(black_white|bw_clean)$")
