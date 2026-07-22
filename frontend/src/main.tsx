@@ -36,12 +36,67 @@ const ENHANCEMENT_MODES = [
 ] as const;
 
 function formatApiUrl(path: string): string {
-  return `${API_BASE}${path}?v=${Date.now()}`;
+  return `${API_BASE}${path}`;
 }
 
 async function extractErrorMessage(response: Response): Promise<string> {
   const body = await response.json().catch(() => null);
   return body?.detail || `Request failed with status ${response.status}.`;
+}
+
+async function apiFetch(
+  url: string,
+  options: RequestInit & { timeoutMs?: number; retries?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = 60000, retries = 2, signal, ...fetchOptions } = options;
+
+  let attempt = 0;
+  while (attempt <= retries) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let combinedSignal: AbortSignal;
+    if (signal) {
+      if ('any' in AbortSignal && typeof (AbortSignal as any).any === 'function') {
+        combinedSignal = (AbortSignal as any).any([signal, controller.signal]);
+      } else {
+        combinedSignal = controller.signal;
+      }
+    } else {
+      combinedSignal = controller.signal;
+    }
+
+    try {
+      const response = await fetch(url, { ...fetchOptions, signal: combinedSignal });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        throw new Error(await extractErrorMessage(response));
+      }
+      return response;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (signal?.aborted) {
+        throw new Error('Request cancelled.');
+      }
+      if (attempt < retries && err instanceof Error && err.name !== 'AbortError') {
+        attempt++;
+        await new Promise((res) => setTimeout(res, 800 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Network request failed after retries.');
+}
+
+function preloadImage(url: string): Promise<void> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => resolve();
+    img.onerror = () => resolve();
+    img.src = url;
+  });
 }
 
 function App() {
@@ -54,6 +109,8 @@ function App() {
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
+  const enhanceAbortRef = useRef<AbortController | null>(null);
+
   const handleUpload = async (file: File) => {
     setBusy(true);
     setError('');
@@ -61,24 +118,17 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const uploadRes = await fetch(`${API_BASE}/upload`, {
+      const uploadRes = await apiFetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData,
       });
 
-      if (!uploadRes.ok) {
-        throw new Error(await extractErrorMessage(uploadRes));
-      }
-
       const data: UploadData = await uploadRes.json();
+      await preloadImage(formatApiUrl(data.image_url));
 
-      const detectRes = await fetch(`${API_BASE}/detect?session_id=${data.session_id}`, {
+      const detectRes = await apiFetch(`${API_BASE}/detect?session_id=${data.session_id}`, {
         method: 'POST',
       });
-
-      if (!detectRes.ok) {
-        throw new Error(await extractErrorMessage(detectRes));
-      }
 
       const detectData = await detectRes.json();
       setUpload(data);
@@ -96,12 +146,9 @@ function App() {
     setBusy(true);
     setError('');
     try {
-      const detectRes = await fetch(`${API_BASE}/detect?session_id=${upload.session_id}`, {
+      const detectRes = await apiFetch(`${API_BASE}/detect?session_id=${upload.session_id}`, {
         method: 'POST',
       });
-      if (!detectRes.ok) {
-        throw new Error(await extractErrorMessage(detectRes));
-      }
       const detectData = await detectRes.json();
       setCorners(detectData.corners);
     } catch (err) {
@@ -116,7 +163,7 @@ function App() {
     setBusy(true);
     setError('');
     try {
-      const cropRes = await fetch(`${API_BASE}/crop`, {
+      const cropRes = await apiFetch(`${API_BASE}/crop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,12 +172,10 @@ function App() {
         }),
       });
 
-      if (!cropRes.ok) {
-        throw new Error(await extractErrorMessage(cropRes));
-      }
-
       const data = await cropRes.json();
-      setCropUrl(formatApiUrl(data.image_url));
+      const url = formatApiUrl(data.image_url);
+      await preloadImage(url);
+      setCropUrl(url);
       setStep(2);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Please keep all four corners inside the image.');
@@ -141,28 +186,37 @@ function App() {
 
   const handleEnhance = async (selectedMode = mode) => {
     if (!upload) return;
+
+    if (enhanceAbortRef.current) {
+      enhanceAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    enhanceAbortRef.current = controller;
+
     setBusy(true);
     setError('');
     try {
-      const enhanceRes = await fetch(`${API_BASE}/enhance`, {
+      const enhanceRes = await apiFetch(`${API_BASE}/enhance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: upload.session_id,
           mode: selectedMode,
         }),
+        signal: controller.signal,
       });
 
-      if (!enhanceRes.ok) {
-        throw new Error(await extractErrorMessage(enhanceRes));
-      }
-
       const data = await enhanceRes.json();
-      setFinalUrl(formatApiUrl(data.image_url));
+      const url = formatApiUrl(data.image_url);
+      await preloadImage(url);
+      setFinalUrl(url);
     } catch (err) {
+      if (err instanceof Error && err.message === 'Request cancelled.') return;
       setError(err instanceof Error ? err.message : 'Could not apply selected enhancement.');
     } finally {
-      setBusy(false);
+      if (enhanceAbortRef.current === controller) {
+        setBusy(false);
+      }
     }
   };
 
@@ -173,6 +227,9 @@ function App() {
   }, [step]);
 
   const restartScanner = () => {
+    if (enhanceAbortRef.current) {
+      enhanceAbortRef.current.abort();
+    }
     setStep(0);
     setUpload(undefined);
     setCropUrl('');
@@ -460,7 +517,7 @@ function InteractiveImageViewer({
         }}
       >
         <div className="image-relative-container">
-          <img src={src} alt={alt} draggable={false} />
+          <img src={src} alt={alt} draggable={false} decoding="async" />
           {children}
         </div>
       </div>
