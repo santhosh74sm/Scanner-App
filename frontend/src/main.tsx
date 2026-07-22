@@ -186,9 +186,13 @@ function App() {
     <main>
       <header>
         <div className="brand">
-          <span>▣</span> Paperly DocScanner
+          <span>▣</span> Paperly DocScanner <em>v1.0</em>
         </div>
-        <div className="secure">OpenCV Document Scanner Engine</div>
+        <div className="secure">
+          <div className="secure-badge">
+            <div className="secure-dot" /> OPENCV ENGINE READY
+          </div>
+        </div>
       </header>
 
       <ProgressIndicator currentStep={step} />
@@ -255,11 +259,11 @@ function App() {
 function ProgressIndicator({ currentStep }: { currentStep: number }) {
   const steps = ['Upload', 'Crop', 'Compare', 'Enhance', 'Done'];
   return (
-    <div className="progress">
+    <div className="progress" role="progressbar" aria-valuenow={currentStep + 1} aria-valuemin={1} aria-valuemax={5} aria-label={`Step ${currentStep + 1} of 5: ${steps[currentStep]}`}>
       {steps.map((label, idx) => {
         const isActive = idx <= currentStep;
         return (
-          <div className={isActive ? 'active' : ''} key={label}>
+          <div className={isActive ? 'active' : ''} key={label} aria-current={idx === currentStep ? 'step' : undefined}>
             <i>{idx < currentStep ? <FiCheck /> : idx + 1}</i>
             <span>{label}</span>
           </div>
@@ -281,14 +285,14 @@ function HomeStep({ onUpload, busy }: { onUpload: (file: File) => void; busy: bo
   return (
     <div className="hero">
       <div>
-        <p className="eyebrow">HIGH PRECISION DOCUMENT SCANNER</p>
+        <div className="eyebrow-badge">⚡ AI & OPENCV POWERED</div>
         <h1>
           Turn photos into
           <br />
           <em>crisp documents.</em>
         </h1>
         <p className="lede">
-          Automatic boundary detection, perspective correction, and smart contrast enhancements powered by OpenCV.
+          Automatic boundary detection, perspective correction, and smart contrast enhancements powered by high precision computer vision.
         </p>
       </div>
       <div {...getRootProps()} className={`drop ${isDragActive ? 'hover' : ''}`}>
@@ -303,11 +307,18 @@ function HomeStep({ onUpload, busy }: { onUpload: (file: File) => void; busy: bo
             <div className="upload-icon">
               <FiUpload />
             </div>
-            <h2>{isDragActive ? 'Drop file here' : 'Drop your document here'}</h2>
-            <p>Supports JPG, PNG, WEBP, BMP, and TIFF</p>
+            <h2>{isDragActive ? 'Drop file here' : 'Upload your document'}</h2>
+            <p>Drag & drop your file or click to browse</p>
             <button className="primary" type="button">
-              <FiImage /> Browse Computer
+              <FiImage /> Choose Document
             </button>
+            <div className="format-pills">
+              <span className="format-pill">JPG</span>
+              <span className="format-pill">PNG</span>
+              <span className="format-pill">WEBP</span>
+              <span className="format-pill">BMP</span>
+              <span className="format-pill">TIFF</span>
+            </div>
           </>
         )}
       </div>
@@ -336,14 +347,6 @@ function CropStep({
   onAuto: () => void;
   busy: boolean;
 }) {
-  const [zoom, setZoom] = useState<number>(1.0);
-  const [rotation, setRotation] = useState<number>(0);
-
-  const handleReset = () => {
-    setZoom(1.0);
-    setRotation(0);
-  };
-
   return (
     <div className="workspace">
       <aside>
@@ -353,7 +356,7 @@ function CropStep({
         <p className="eyebrow">STEP 2 OF 5</p>
         <h1>Adjust Crop Corners</h1>
         <p>
-          Drag corner markers to paper edges. When zoomed in, drag the document background to pan.
+          Drag corner markers to paper edges. Drag background to pan, or use mouse wheel to zoom.
         </p>
 
         <div className="button-group">
@@ -366,137 +369,194 @@ function CropStep({
         </div>
       </aside>
 
-      <div className="canvas-card">
-        <CropCanvas
-          image={image}
-          points={corners}
-          naturalWidth={imageWidth}
-          naturalHeight={imageHeight}
-          zoom={zoom}
-          rotation={rotation}
-          setPoints={onChange}
-        />
-
-        <div className="canvas-tools">
-          <button
-            onClick={() => setZoom((z) => Math.max(0.5, parseFloat((z - 0.25).toFixed(2))))}
-            title="Zoom Out"
-            type="button"
-          >
-            <FiZoomOut />
-          </button>
-          <span className="zoom-value-label">{Math.round(zoom * 100)}%</span>
-          <button
-            onClick={() => setZoom((z) => Math.min(5.0, parseFloat((z + 0.25).toFixed(2))))}
-            title="Zoom In"
-            type="button"
-          >
-            <FiZoomIn />
-          </button>
-          <button
-            onClick={() => setRotation((r) => (r + 90) % 360)}
-            title="Rotate 90°"
-            type="button"
-          >
-            <FiRotateCw />
-          </button>
-          <button
-            onClick={() => setRotation((r) => (r - 90 + 360) % 360)}
-            title="Rotate -90°"
-            type="button"
-          >
-            <FiRotateCcw />
-          </button>
-          <button onClick={handleReset} title="Reset View" type="button">
-            <FiMaximize />
-          </button>
-        </div>
+      <div className="preview-card">
+        <InteractiveImageViewer src={image} alt="Document crop source" showRotateControls={true}>
+          <CropOverlay
+            points={corners}
+            naturalWidth={imageWidth}
+            naturalHeight={imageHeight}
+            setPoints={onChange}
+          />
+        </InteractiveImageViewer>
       </div>
     </div>
   );
 }
 
-function CropCanvas({
-  image,
-  points,
-  naturalWidth,
-  naturalHeight,
-  zoom,
-  rotation,
-  setPoints,
-}: {
-  image: string;
-  points: Point[];
-  naturalWidth: number;
-  naturalHeight: number;
-  zoom: number;
-  rotation: number;
-  setPoints: (points: Point[]) => void;
-}) {
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [activeCorner, setActiveCorner] = useState<number>(-1);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState<boolean>(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+type InteractiveImageViewerProps = {
+  src: string;
+  alt: string;
+  children?: React.ReactNode;
+  showRotateControls?: boolean;
+};
 
-  // Reset pan when zoom resets to 1.0 (Fit View)
+function InteractiveImageViewer({
+  src,
+  alt,
+  children,
+  showRotateControls = true,
+}: InteractiveImageViewerProps) {
+  const [zoom, setZoom] = useState<number>(1.0);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [rotation, setRotation] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const panRef = useRef(pan);
+  panRef.current = pan;
+
   useEffect(() => {
     if (zoom <= 1.0) {
       setPan({ x: 0, y: 0 });
     }
   }, [zoom]);
 
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setZoom((z) => Math.max(0.5, Math.min(4.0, parseFloat((z * factor).toFixed(2)))));
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    const startX = e.clientX - panRef.current.x;
+    const startY = e.clientY - panRef.current.y;
+    setIsDragging(true);
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      setPan({
+        x: moveEvent.clientX - startX,
+        y: moveEvent.clientY - startY,
+      });
+    };
+
+    const onPointerUp = () => {
+      setIsDragging(false);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const resetView = () => {
+    setZoom(1.0);
+    setPan({ x: 0, y: 0 });
+    setRotation(0);
+  };
+
+  return (
+    <div
+      className={`interactive-viewer ${isDragging ? 'panning' : ''}`}
+      onWheel={handleWheel}
+      onPointerDown={handlePointerDown}
+      onDoubleClick={resetView}
+    >
+      <div
+        className="viewer-viewport"
+        style={{
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+          transition: isDragging ? 'none' : 'transform 0.15s ease-out',
+        }}
+      >
+        <div className="image-relative-container">
+          <img src={src} alt={alt} draggable={false} />
+          {children}
+        </div>
+      </div>
+
+      <div className="viewer-toolbar">
+        <button
+          onClick={() => setZoom((z) => Math.max(0.5, parseFloat((z - 0.25).toFixed(2))))}
+          title="Zoom Out"
+          type="button"
+        >
+          <FiZoomOut />
+        </button>
+        <span className="zoom-value-label">{Math.round(zoom * 100)}%</span>
+        <button
+          onClick={() => setZoom((z) => Math.min(4.0, parseFloat((z + 0.25).toFixed(2))))}
+          title="Zoom In"
+          type="button"
+        >
+          <FiZoomIn />
+        </button>
+        {showRotateControls && (
+          <>
+            <button
+              onClick={() => setRotation((r) => (r + 90) % 360)}
+              title="Rotate 90°"
+              type="button"
+            >
+              <FiRotateCw />
+            </button>
+            <button
+              onClick={() => setRotation((r) => (r - 90 + 360) % 360)}
+              title="Rotate -90°"
+              type="button"
+            >
+              <FiRotateCcw />
+            </button>
+          </>
+        )}
+        <button onClick={resetView} title="Fit Entire Image" type="button">
+          <FiMaximize /> Fit Image
+        </button>
+        <button onClick={() => setZoom(1.0)} title="100% Actual Size" type="button">
+          100%
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CropOverlay({
+  points,
+  naturalWidth,
+  naturalHeight,
+  setPoints,
+}: {
+  points: Point[];
+  naturalWidth: number;
+  naturalHeight: number;
+  setPoints: (points: Point[]) => void;
+}) {
+  const [activeCorner, setActiveCorner] = useState<number>(-1);
+
   const handleCornerPointerDown = (index: number, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setActiveCorner(index);
-  };
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (activeCorner >= 0) return;
-    if (zoom > 1.0) {
-      setIsPanning(true);
-      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    }
-  };
+    const container = (e.currentTarget as HTMLElement).closest('.image-relative-container');
+    if (!container) return;
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (isPanning && zoom > 1.0) {
-      const newPanX = e.clientX - dragStart.x;
-      const newPanY = e.clientY - dragStart.y;
-
-      // Boundary constraints for smooth clamping
-      const maxPanX = (zoom - 1.0) * 350;
-      const maxPanY = (zoom - 1.0) * 350;
-      const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPanX));
-      const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPanY));
-
-      setPan({ x: clampedX, y: clampedY });
-      return;
-    }
-
-    if (activeCorner >= 0 && imgRef.current) {
-      const rect = imgRef.current.getBoundingClientRect();
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const rect = container.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
 
-      let relX = (e.clientX - rect.left) / rect.width;
-      let relY = (e.clientY - rect.top) / rect.height;
+      let relX = (moveEvent.clientX - rect.left) / rect.width;
+      let relY = (moveEvent.clientY - rect.top) / rect.height;
 
       relX = Math.max(0, Math.min(1, relX));
       relY = Math.max(0, Math.min(1, relY));
 
-      const realX = relX * naturalWidth;
-      const realY = relY * naturalHeight;
+      const realX = Math.round(relX * naturalWidth);
+      const realY = Math.round(relY * naturalHeight);
 
       const newPoints = [...points];
-      newPoints[activeCorner] = [Math.round(realX), Math.round(realY)];
+      newPoints[index] = [realX, realY];
       setPoints(newPoints);
-    }
-  };
+    };
 
-  const handlePointerUp = () => {
-    setActiveCorner(-1);
-    setIsPanning(false);
+    const handlePointerUp = () => {
+      setActiveCorner(-1);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
   };
 
   const normalizedPoints = points.map(([x, y]) => [
@@ -507,47 +567,41 @@ function CropCanvas({
   const polygonPointsStr = normalizedPoints.map((p) => `${p[0]},${p[1]}`).join(' ');
 
   return (
-    <div
-      className={`crop-canvas-wrapper ${zoom > 1.0 ? 'zoom-pannable' : ''} ${isPanning ? 'panning' : ''}`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
+    <svg
+      viewBox="0 0 1 1"
+      preserveAspectRatio="none"
+      className="crop-svg-overlay"
+      style={{ pointerEvents: 'none' }}
     >
-      <div
-        className="transform-viewport"
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
-          transition: activeCorner >= 0 || isPanning ? 'none' : 'transform 0.15s ease-out',
-        }}
-      >
-        <div className="image-relative-container">
-          <img
-            ref={imgRef}
-            src={image}
-            alt="Document crop source"
-            draggable={false}
+      <polygon
+        points={polygonPointsStr}
+        className="crop-polygon"
+        style={{ pointerEvents: 'none' }}
+      />
+      {normalizedPoints.map((p, i) => (
+        <g key={i} style={{ pointerEvents: 'none' }}>
+          {/* Transparent enlarged touch hit-target */}
+          <circle
+            cx={p[0]}
+            cy={p[1]}
+            r={0.045}
+            fill="transparent"
+            style={{ cursor: 'grab', pointerEvents: 'auto' }}
+            onPointerDown={(e) => handleCornerPointerDown(i, e)}
+            aria-label={`Crop Corner ${i + 1}`}
           />
-          <svg
-            viewBox="0 0 1 1"
-            preserveAspectRatio="none"
-            className="crop-svg-overlay"
-          >
-            <polygon points={polygonPointsStr} className="crop-polygon" />
-            {normalizedPoints.map((p, i) => (
-              <circle
-                key={i}
-                cx={p[0]}
-                cy={p[1]}
-                r={0.022 / Math.sqrt(zoom)}
-                className={`crop-handle ${activeCorner === i ? 'dragging' : ''}`}
-                onPointerDown={(e) => handleCornerPointerDown(i, e)}
-              />
-            ))}
-          </svg>
-        </div>
-      </div>
-    </div>
+          {/* Visible handle circle */}
+          <circle
+            cx={p[0]}
+            cy={p[1]}
+            r={0.022}
+            className={`crop-handle ${activeCorner === i ? 'dragging' : ''}`}
+            style={{ pointerEvents: 'auto' }}
+            onPointerDown={(e) => handleCornerPointerDown(i, e)}
+          />
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -707,79 +761,8 @@ function EnhanceStep({
             <p>Applying filter...</p>
           </div>
         ) : (
-          <ImageViewer src={image} alt="Enhanced document preview" />
+          <InteractiveImageViewer src={image} alt="Enhanced document preview" showRotateControls={true} />
         )}
-      </div>
-    </div>
-  );
-}
-
-function ImageViewer({ src, alt }: { src: string; alt: string }) {
-  const [zoom, setZoom] = useState<number>(1.0);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    setZoom((z) => Math.max(0.5, Math.min(4.0, parseFloat((z * factor).toFixed(2)))));
-  };
-
-  const handlePointerDown = (e: React.PointerEvent) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (isDragging) {
-      setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    }
-  };
-
-  const handlePointerUp = () => {
-    setIsDragging(false);
-  };
-
-  const resetView = () => {
-    setZoom(1.0);
-    setPan({ x: 0, y: 0 });
-  };
-
-  return (
-    <div
-      className="interactive-viewer"
-      onWheel={handleWheel}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
-      onDoubleClick={resetView}
-    >
-      <div
-        className="viewer-viewport"
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          transition: isDragging ? 'none' : 'transform 0.15s ease-out',
-        }}
-      >
-        <img src={src} alt={alt} draggable={false} />
-      </div>
-
-      <div className="viewer-toolbar">
-        <button onClick={() => setZoom((z) => Math.max(0.5, parseFloat((z - 0.25).toFixed(2))))} title="Zoom Out" type="button">
-          <FiZoomOut />
-        </button>
-        <span>{Math.round(zoom * 100)}%</span>
-        <button onClick={() => setZoom((z) => Math.min(4.0, parseFloat((z + 0.25).toFixed(2))))} title="Zoom In" type="button">
-          <FiZoomIn />
-        </button>
-        <button onClick={resetView} title="Fit Entire Image" type="button">
-          <FiMaximize /> Fit Image
-        </button>
-        <button onClick={() => { setZoom(1.5); setPan({ x: 0, y: 0 }); }} title="100% Actual Size" type="button">
-          100%
-        </button>
       </div>
     </div>
   );
@@ -796,9 +779,9 @@ function FinalStep({
 }) {
   return (
     <div className="center-page final">
-      <p className="eyebrow">SCAN COMPLETED</p>
+      <div className="eyebrow-badge">✓ SCAN COMPLETED</div>
       <h1>Your Document is Ready</h1>
-      <p className="lede">Crisp, straightened, high contrast scan ready for export.</p>
+      <p className="lede">Crisp, straightened, high contrast scan ready for instant export.</p>
       <img className="final-image" src={image} alt="Final processed scan result" />
       <div className="actions">
         <a className="primary" href={`${API_BASE}/download?session_id=${session}&format=png`}>
