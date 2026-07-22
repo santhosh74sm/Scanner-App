@@ -6,7 +6,7 @@ A modern, single-image document-scanning application built around the repository
 
 - One-image workflow: upload → auto-detect → manually adjust four corners → perspective preview → enhance → download.
 - Original OpenCV LSD/contour detection and perspective-correction pipeline retained.
-- Enhancement modes: Original, Color, Grayscale, Black & White, High Contrast, Magic Color, and Auto.
+- B&W Clean document enhancement.
 - Responsive React UI with drag/drop, draggable crop corners, loading states, progress tracking, comparisons, and JPG/PNG downloads.
 - Validated FastAPI endpoints and isolated per-scan sessions.
 
@@ -49,7 +49,7 @@ Supported upload types: JPEG, PNG, WEBP, BMP, and TIFF. Sessions are filesystem-
 The legacy command stays intact:
 
 ```powershell
-python scan.py --image sample_images/desk.JPG -i
+python scan.py --image sample_images/desk.JPG
 ```
 
 ## Verification

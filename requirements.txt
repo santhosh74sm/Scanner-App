@@ -1,7 +1,4 @@
 ﻿# Python 3.14-compatible runtime dependencies.
-# pylsd and SciPy are no longer required: OpenCV provides LSD and NumPy provides
-# the small geometry operations used by the scanner.
-matplotlib>=3.10.0
 numpy>=2.2.0
 opencv-python>=4.12.0
 

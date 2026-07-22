@@ -18,7 +18,6 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
-ALLOWED_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/bmp", "image/tiff"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SESSION_MAX_AGE_SECONDS = 86400  # 24 hours
 
