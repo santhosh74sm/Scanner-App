@@ -19,7 +19,8 @@ import {
 } from 'react-icons/fi';
 import './styles.css';
 
-const API_BASE = '/api';
+const rawApiUrl = import.meta.env.VITE_API_URL;
+const API_BASE = (rawApiUrl && rawApiUrl.trim() !== '' ? rawApiUrl : '/api').replace(/\/+$/, '');
 
 type Point = [number, number];
 
