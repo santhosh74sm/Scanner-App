@@ -40,8 +40,43 @@ function formatApiUrl(path: string): string {
 }
 
 async function extractErrorMessage(response: Response): Promise<string> {
-  const body = await response.json().catch(() => null);
-  return body?.detail || `Request failed with status ${response.status}.`;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const body = await response.json().catch(() => null);
+    if (body?.detail) return body.detail;
+  }
+  if (response.status === 404) {
+    return 'Session expired or image resource not found. Please upload again.';
+  }
+  return `Server request failed with status ${response.status}.`;
+}
+
+function createCombinedSignal(signal1?: AbortSignal | null, signal2?: AbortSignal | null): AbortSignal {
+  const controller = new AbortController();
+
+  const onAbort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+
+  if (signal1) {
+    if (signal1.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    signal1.addEventListener('abort', onAbort, { once: true });
+  }
+
+  if (signal2) {
+    if (signal2.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    signal2.addEventListener('abort', onAbort, { once: true });
+  }
+
+  return controller.signal;
 }
 
 async function apiFetch(
@@ -52,19 +87,9 @@ async function apiFetch(
 
   let attempt = 0;
   while (attempt <= retries) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    let combinedSignal: AbortSignal;
-    if (signal) {
-      if ('any' in AbortSignal && typeof (AbortSignal as any).any === 'function') {
-        combinedSignal = (AbortSignal as any).any([signal, controller.signal]);
-      } else {
-        combinedSignal = controller.signal;
-      }
-    } else {
-      combinedSignal = controller.signal;
-    }
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const combinedSignal = createCombinedSignal(signal, timeoutController.signal);
 
     try {
       const response = await fetch(url, { ...fetchOptions, signal: combinedSignal });
@@ -77,6 +102,9 @@ async function apiFetch(
       clearTimeout(timeoutId);
       if (signal?.aborted) {
         throw new Error('Request cancelled.');
+      }
+      if (timeoutController.signal.aborted) {
+        throw new Error('Server request timed out. Please try again.');
       }
       if (attempt < retries && err instanceof Error && err.name !== 'AbortError') {
         attempt++;
@@ -124,7 +152,8 @@ function App() {
       });
 
       const data: UploadData = await uploadRes.json();
-      await preloadImage(formatApiUrl(data.image_url));
+      const url = formatApiUrl(data.image_url);
+      preloadImage(url);
 
       const detectRes = await apiFetch(`${API_BASE}/detect?session_id=${data.session_id}`, {
         method: 'POST',
@@ -174,7 +203,7 @@ function App() {
 
       const data = await cropRes.json();
       const url = formatApiUrl(data.image_url);
-      await preloadImage(url);
+      preloadImage(url);
       setCropUrl(url);
       setStep(2);
     } catch (err) {
@@ -208,8 +237,8 @@ function App() {
 
       const data = await enhanceRes.json();
       const url = formatApiUrl(data.image_url);
-      await preloadImage(url);
       setFinalUrl(url);
+      preloadImage(url);
     } catch (err) {
       if (err instanceof Error && err.message === 'Request cancelled.') return;
       setError(err instanceof Error ? err.message : 'Could not apply selected enhancement.');
