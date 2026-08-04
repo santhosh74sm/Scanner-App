@@ -165,13 +165,13 @@ class DocumentEnhancer:
         return out
 
     @classmethod
-    def preprocess_paper_background(cls, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def preprocess_paper_background(cls, image: np.ndarray) -> np.ndarray:
         """Execute White Balance -> Illumination Division -> Paper Whitening with intermediate cleanup."""
         wb_img = cls.automatic_white_balance(image)
         flattened = cls.flatten_illumination(wb_img, target_dim=350)
         preprocessed = cls.adaptive_paper_whitening(flattened, target_paper_min=255.0)
-        del flattened
-        return preprocessed, wb_img
+        del flattened, wb_img
+        return preprocessed
 
     @staticmethod
     def sharpen_text(image: np.ndarray, amount: float = 0.35) -> np.ndarray:
@@ -255,7 +255,7 @@ class DocumentEnhancer:
         scene = cls.analyze_scene(gray_input)
 
         # UNIFIED PREPROCESSING PIPELINE
-        preprocessed, _ = cls.preprocess_paper_background(proc_img)
+        preprocessed = cls.preprocess_paper_background(proc_img)
         if proc_img is not image:
             del proc_img
 

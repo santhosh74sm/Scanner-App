@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 
 from .models.schemas import CornersRequest, EnhanceRequest
 from .scanner.service import ScannerService
@@ -20,6 +21,7 @@ DATA_DIR.mkdir(exist_ok=True)
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 SESSION_MAX_AGE_SECONDS = 86400  # 24 hours
+MAX_CACHED_SESSIONS = 4
 
 MEDIA_TYPES = {
     ".webp": "image/webp",
@@ -29,6 +31,55 @@ MEDIA_TYPES = {
 }
 
 service = ScannerService()
+
+
+class SessionImageCache:
+    """Bounded cache for active scan sessions.
+
+    Disk remains the recovery source after a restart or eviction, while the
+    normal interactive path reuses decoded matrices and encoded response bytes.
+    """
+
+    def __init__(self, max_sessions: int = MAX_CACHED_SESSIONS) -> None:
+        self.max_sessions = max_sessions
+        self.sessions: OrderedDict[str, dict[str, object]] = OrderedDict()
+
+    def get(self, session_id: str, name: str) -> np.ndarray | None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        self.sessions.move_to_end(session_id)
+        image = session.get(name)
+        return image if isinstance(image, np.ndarray) else None
+
+    def get_bytes(self, session_id: str, name: str) -> bytes | None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        self.sessions.move_to_end(session_id)
+        payload = session.get(f"{name}_bytes")
+        return payload if isinstance(payload, bytes) else None
+
+    def put(self, session_id: str, name: str, image: np.ndarray, payload: bytes) -> None:
+        session = self.sessions.setdefault(session_id, {})
+        session[name] = image
+        session[f"{name}_bytes"] = payload
+        self.sessions.move_to_end(session_id)
+        while len(self.sessions) > self.max_sessions:
+            self.sessions.popitem(last=False)
+
+    def put_bytes(self, session_id: str, name: str, payload: bytes) -> None:
+        session = self.sessions.setdefault(session_id, {})
+        session[f"{name}_bytes"] = payload
+        self.sessions.move_to_end(session_id)
+        while len(self.sessions) > self.max_sessions:
+            self.sessions.popitem(last=False)
+
+    def discard(self, session_id: str) -> None:
+        self.sessions.pop(session_id, None)
+
+
+session_cache = SessionImageCache()
 
 app = FastAPI(
     title="Document Scanner API",
@@ -56,6 +107,7 @@ def cleanup_stale_sessions() -> None:
                     for subfile in item.iterdir():
                         subfile.unlink(missing_ok=True)
                     item.rmdir()
+                    session_cache.discard(item.name)
             except OSError:
                 pass
 
@@ -76,7 +128,10 @@ def read_image(path: Path) -> np.ndarray:
     return image
 
 
-def read_session_image(directory: Path, name: str) -> np.ndarray:
+def read_session_image(session_id: str, directory: Path, name: str) -> np.ndarray:
+    cached = session_cache.get(session_id, name)
+    if cached is not None:
+        return cached
     webp_path = directory / f"{name}.webp"
     png_path = directory / f"{name}.png"
     jpg_path = directory / f"{name}.jpg"
@@ -89,7 +144,7 @@ def read_session_image(directory: Path, name: str) -> np.ndarray:
     raise HTTPException(404, f"Session image {name} not found.")
 
 
-def write_image(path: Path, image: np.ndarray, quality: int = 85) -> None:
+def encode_image(path: Path, image: np.ndarray, quality: int = 85) -> bytes:
     ext = path.suffix.lower()
     params = []
     if ext == ".webp":
@@ -99,12 +154,17 @@ def write_image(path: Path, image: np.ndarray, quality: int = 85) -> None:
     elif ext == ".png":
         params = [cv2.IMWRITE_PNG_COMPRESSION, 4]
 
-    success = cv2.imwrite(str(path), image, params)
+    success, encoded = cv2.imencode(path.suffix.lower(), image, params)
     if not success:
-        # Fallback to PNG if format encoding fails
-        fallback_path = path.with_suffix(".png")
-        if not cv2.imwrite(str(fallback_path), image):
-            raise HTTPException(500, f"Unable to write image file {path.name}.")
+        raise HTTPException(500, f"Unable to encode image file {path.name}.")
+    return encoded.tobytes()
+
+
+def persist_image(session_id: str, path: Path, name: str, image: np.ndarray, quality: int = 85) -> bytes:
+    payload = encode_image(path, image, quality)
+    path.write_bytes(payload)
+    session_cache.put(session_id, name, image, payload)
+    return payload
 
 
 @app.get("/health")
@@ -135,7 +195,7 @@ async def upload(file: UploadFile = File(...)) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
 
     # Save lightweight WebP for web previews (~800KB vs ~12MB)
-    write_image(directory / "source.webp", image, quality=85)
+    persist_image(session_id, directory / "source.webp", "source", image, quality=85)
     height, width = image.shape[:2]
 
     return {
@@ -149,7 +209,7 @@ async def upload(file: UploadFile = File(...)) -> dict:
 @app.post("/detect")
 def detect(session_id: str) -> dict:
     directory = session_dir(session_id)
-    source_img = read_session_image(directory, "source")
+    source_img = read_session_image(session_id, directory, "source")
     corners = service.detect(source_img).round(2).tolist()
     return {"session_id": session_id, "corners": corners}
 
@@ -157,13 +217,13 @@ def detect(session_id: str) -> dict:
 @app.post("/crop")
 def crop(payload: CornersRequest) -> dict:
     directory = session_dir(payload.session_id)
-    source_img = read_session_image(directory, "source")
+    source_img = read_session_image(payload.session_id, directory, "source")
     try:
         cropped = service.crop(source_img, payload.corners)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    write_image(directory / "cropped.webp", cropped, quality=85)
+    persist_image(payload.session_id, directory / "cropped.webp", "cropped", cropped, quality=85)
     height, width = cropped.shape[:2]
 
     return {
@@ -178,16 +238,16 @@ def crop(payload: CornersRequest) -> dict:
 def enhance(payload: EnhanceRequest) -> dict:
     directory = session_dir(payload.session_id)
     try:
-        image_to_enhance = read_session_image(directory, "cropped")
+        image_to_enhance = read_session_image(payload.session_id, directory, "cropped")
     except HTTPException:
-        image_to_enhance = read_session_image(directory, "source")
+        image_to_enhance = read_session_image(payload.session_id, directory, "source")
 
     try:
         final = service.enhance(image_to_enhance, payload.mode)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    write_image(directory / "final.webp", final, quality=85)
+    persist_image(payload.session_id, directory / "final.webp", "final", final, quality=85)
     return {
         "session_id": payload.session_id,
         "mode": payload.mode,
@@ -196,35 +256,49 @@ def enhance(payload: EnhanceRequest) -> dict:
 
 
 @app.get("/download")
-def download(session_id: str, format: str = "png") -> FileResponse:
+def download(session_id: str, format: str = "png") -> Response:
     if format not in {"png", "jpg"}:
         raise HTTPException(422, "Format parameter must be 'png' or 'jpg'.")
 
     directory = session_dir(session_id)
     try:
-        image = read_session_image(directory, "final")
+        image = read_session_image(session_id, directory, "final")
     except HTTPException:
         try:
-            image = read_session_image(directory, "cropped")
+            image = read_session_image(session_id, directory, "cropped")
         except HTTPException:
-            image = read_session_image(directory, "source")
+            image = read_session_image(session_id, directory, "source")
 
-    output_file = directory / f"scan.{format}"
-    write_image(output_file, image, quality=95)
+    cached = session_cache.get_bytes(session_id, f"scan_{format}")
+    if cached is None:
+        cached = encode_image(directory / f"scan.{format}", image, quality=95)
+        session_cache.put_bytes(session_id, f"scan_{format}", cached)
 
     media_type = "image/png" if format == "png" else "image/jpeg"
-    return FileResponse(output_file, media_type=media_type, filename=f"document-scan.{format}")
+    return Response(
+        content=cached,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="document-scan.{format}"'},
+    )
 
 
 @app.get("/files/{session_id}/{name}")
-def serve_file(session_id: str, name: str) -> FileResponse:
+def serve_file(session_id: str, name: str) -> Response:
     if name not in {"source.webp", "cropped.webp", "final.webp", "source.png", "cropped.png", "final.png"}:
         raise HTTPException(404, "Requested resource not found.")
 
     directory = session_dir(session_id)
+    stem = Path(name).stem
+    cached = session_cache.get_bytes(session_id, stem)
+    if cached is not None:
+        media_type = MEDIA_TYPES.get(Path(name).suffix.lower(), "image/png")
+        return Response(
+            content=cached,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
     file_path = directory / name
     if not file_path.exists():
-        stem = Path(name).stem
         alt_webp = directory / f"{stem}.webp"
         alt_png = directory / f"{stem}.png"
         if alt_webp.exists():
