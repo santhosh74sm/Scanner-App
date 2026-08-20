@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from .models.schemas import CornersRequest, EnhanceRequest
 from .scanner.service import ScannerService
