@@ -29,6 +29,7 @@ type UploadData = {
   image_url: string;
   width: number;
   height: number;
+  corners?: Point[];
 };
 
 const ENHANCEMENT_MODES = [
@@ -155,13 +156,17 @@ function App() {
       const url = formatApiUrl(data.image_url);
       preloadImage(url);
 
-      const detectRes = await apiFetch(`${API_BASE}/detect?session_id=${data.session_id}`, {
-        method: 'POST',
-      });
+      let detectedCorners = data.corners;
+      if (!detectedCorners) {
+        const detectRes = await apiFetch(`${API_BASE}/detect?session_id=${data.session_id}`, {
+          method: 'POST',
+        });
+        const detectData = await detectRes.json();
+        detectedCorners = detectData.corners;
+      }
 
-      const detectData = await detectRes.json();
       setUpload(data);
-      setCorners(detectData.corners);
+      setCorners(detectedCorners || []);
       setStep(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to upload or process this image.');
