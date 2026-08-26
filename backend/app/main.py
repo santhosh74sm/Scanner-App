@@ -132,15 +132,15 @@ def read_session_image(session_id: str, directory: Path, name: str) -> np.ndarra
     cached = session_cache.get(session_id, name)
     if cached is not None:
         return cached
+    jpg_path = directory / f"{name}.jpg"
     webp_path = directory / f"{name}.webp"
     png_path = directory / f"{name}.png"
-    jpg_path = directory / f"{name}.jpg"
-    if webp_path.exists():
+    if jpg_path.exists():
+        return read_image(jpg_path)
+    elif webp_path.exists():
         return read_image(webp_path)
     elif png_path.exists():
         return read_image(png_path)
-    elif jpg_path.exists():
-        return read_image(jpg_path)
     raise HTTPException(404, f"Session image {name} not found.")
 
 
@@ -160,11 +160,29 @@ def encode_image(path: Path, image: np.ndarray, quality: int = 85) -> bytes:
     return encoded.tobytes()
 
 
+def make_preview_image(image: np.ndarray, max_dim: int = 1600) -> np.ndarray:
+    h, w = image.shape[:2]
+    if max(h, w) <= max_dim:
+        return image
+    scale = max_dim / float(max(h, w))
+    return cv2.resize(image, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+
+
 def persist_image(session_id: str, path: Path, name: str, image: np.ndarray, quality: int = 85) -> bytes:
-    payload = encode_image(path, image, quality)
-    path.write_bytes(payload)
-    session_cache.put(session_id, name, image, payload)
-    return payload
+    # 1. Save full-resolution high-quality JPEG to disk for full-res storage & cache recovery
+    jpg_path = path.with_suffix(".jpg")
+    full_payload = encode_image(jpg_path, image, quality=95)
+    jpg_path.write_bytes(full_payload)
+
+    # 2. Save lightweight display preview WebP for fast browser UI rendering
+    preview_img = make_preview_image(image, max_dim=1600)
+    webp_path = path.with_suffix(".webp")
+    preview_payload = encode_image(webp_path, preview_img, quality=quality)
+    webp_path.write_bytes(preview_payload)
+
+    # 3. Cache full-resolution matrix + preview bytes in session cache
+    session_cache.put(session_id, name, image, preview_payload)
+    return preview_payload
 
 
 @app.get("/health")
@@ -194,15 +212,18 @@ async def upload(file: UploadFile = File(...)) -> dict:
     directory = DATA_DIR / session_id
     directory.mkdir(parents=True, exist_ok=True)
 
-    # Save lightweight WebP for web previews (~800KB vs ~12MB)
     persist_image(session_id, directory / "source.webp", "source", image, quality=85)
     height, width = image.shape[:2]
+
+    # Pre-compute document detection corners during upload to save a network roundtrip
+    corners = service.detect(image).round(2).tolist()
 
     return {
         "session_id": session_id,
         "image_url": f"/files/{session_id}/source.webp",
         "width": width,
         "height": height,
+        "corners": corners,
     }
 
 
@@ -284,7 +305,11 @@ def download(session_id: str, format: str = "png") -> Response:
 
 @app.get("/files/{session_id}/{name}")
 def serve_file(session_id: str, name: str) -> Response:
-    if name not in {"source.webp", "cropped.webp", "final.webp", "source.png", "cropped.png", "final.png"}:
+    if name not in {
+        "source.webp", "cropped.webp", "final.webp",
+        "source.png", "cropped.png", "final.png",
+        "source.jpg", "cropped.jpg", "final.jpg",
+    }:
         raise HTTPException(404, "Requested resource not found.")
 
     directory = session_dir(session_id)

@@ -64,20 +64,12 @@ class DocumentEnhancer:
         if len(image.shape) == 2:
             return image
 
-        p98_b = float(np.percentile(image[:, :, 0], 98))
-        p98_g = float(np.percentile(image[:, :, 1], 98))
-        p98_r = float(np.percentile(image[:, :, 2], 98))
+        # Calculate percentiles across channels vectorially
+        p98 = np.percentile(image, 98, axis=(0, 1))
+        max_val = max(float(np.max(p98)), 1.0)
+        scales = np.clip(max_val / np.maximum(p98, 1.0), 0.85, 1.35)
 
-        max_val = max(p98_b, p98_g, p98_r, 1.0)
-        scale_b = float(np.clip(max_val / max(p98_b, 1.0), 0.85, 1.35))
-        scale_g = float(np.clip(max_val / max(p98_g, 1.0), 0.85, 1.35))
-        scale_r = float(np.clip(max_val / max(p98_r, 1.0), 0.85, 1.35))
-
-        result = image.astype(np.float32)
-        result[:, :, 0] *= scale_b
-        result[:, :, 1] *= scale_g
-        result[:, :, 2] *= scale_r
-
+        result = image.astype(np.float32) * scales
         out = np.clip(result, 0, 255).astype(np.uint8)
         del result
         return out
@@ -100,11 +92,9 @@ class DocumentEnhancer:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
 
         if is_color:
-            bg_small = np.zeros_like(small_img, dtype=np.float32)
-            for c in range(3):
-                dilated = cv2.morphologyEx(small_img[:, :, c], cv2.MORPH_DILATE, kernel)
-                bg_small[:, :, c] = cv2.GaussianBlur(dilated.astype(np.float32), (31, 31), 0)
-                del dilated
+            dilated = cv2.morphologyEx(small_img, cv2.MORPH_DILATE, kernel)
+            bg_small = cv2.GaussianBlur(dilated.astype(np.float32), (31, 31), 0)
+            del dilated
             bg = cv2.resize(bg_small, (w, h), interpolation=cv2.INTER_LINEAR)
             del bg_small
         else:
@@ -144,19 +134,14 @@ class DocumentEnhancer:
         img_float = image.astype(np.float32)
         denom = max(1.0, paper_thresh - black_thresh)
 
+        # Vectorized whitening across all channels simultaneously
+        norm = np.clip((img_float - black_thresh) / denom, 0.0, 1.0) * 255.0
         if len(image.shape) == 3:
-            whitened = np.zeros_like(img_float)
-            for c in range(3):
-                chan = img_float[:, :, c]
-                norm = np.clip((chan - black_thresh) / denom, 0.0, 1.0) * 255.0
-                whitened[:, :, c] = np.where(chan >= paper_thresh, target_paper_min, norm)
-                del chan, norm
+            mask = (gray >= paper_thresh)[:, :, np.newaxis]
+            whitened = np.where(mask, target_paper_min, norm)
         else:
-            norm = np.clip((img_float - black_thresh) / denom, 0.0, 1.0) * 255.0
             whitened = np.where(img_float >= paper_thresh, target_paper_min, norm)
-            del norm
-
-        del img_float
+        del norm, img_float
         if len(image.shape) == 3 or image is not gray:
             del gray
 
@@ -268,21 +253,18 @@ class DocumentEnhancer:
         sauvola_k = 0.12 if scene["contrast"] > 25 else 0.10
         threshold_surface = cls.sauvola_threshold(gray_prep, window_size=25, k=sauvola_k, R=128.0)
 
-        # Detail-preserving soft adaptive thresholding
+        # Detail-preserving soft adaptive thresholding with in-place assignments to minimize memory allocations
         margin = 20.0
         gray_f32 = gray_prep.astype(np.float32)
-        bw_float = np.clip((gray_f32 - (threshold_surface - margin)) / (2.0 * margin), 0.0, 1.0) * 255.0
+        final_bw = np.clip((gray_f32 - (threshold_surface - margin)) / (2.0 * margin), 0.0, 1.0) * 255.0
 
-        # Paper background becomes pure 255 white
-        final_bw = np.where(gray_prep >= (threshold_surface + margin), 255.0, bw_float)
-        # Deep text stroke becomes pure 0 black
-        final_bw = np.where(gray_prep <= (threshold_surface - margin), 0.0, final_bw)
-        del bw_float, threshold_surface
-        # Paper background pixels cleanly mapped to 255
-        final_bw = np.where(gray_prep >= 250.0, 255.0, final_bw)
-        del gray_prep, gray_f32, gray_input
+        # Direct boolean index assignment (avoiding redundant full-size matrix copies)
+        final_bw[gray_prep >= (threshold_surface + margin)] = 255.0
+        final_bw[gray_prep <= (threshold_surface - margin)] = 0.0
+        final_bw[gray_prep >= 250.0] = 255.0
+        del threshold_surface, gray_prep, gray_f32, gray_input
 
-        final_bw = np.clip(final_bw, 0, 255).astype(np.uint8)
+        final_bw = final_bw.astype(np.uint8)
 
         sharpen_amount = 0.25 if scene["noise"] < 500 else 0.10
         sharpened = cls.sharpen_text(final_bw, amount=sharpen_amount)
